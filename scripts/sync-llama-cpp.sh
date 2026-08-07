@@ -5,6 +5,7 @@ REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 ASSETS_GO="${REPO_ROOT}/assets.go"
 TARGET_CONVERTER="${REPO_ROOT}/data/convert_hf_to_gguf.py"
 TARGET_GGUF_DIR="${REPO_ROOT}/data/gguf-py"
+TARGET_CONVERSION_DIR="${REPO_ROOT}/data/conversion"
 MODE="sync"
 TAG=""
 
@@ -99,6 +100,7 @@ TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/llama-cpp-assets.XXXXXX")"
 TMP_CONVERTER="${TMP_ROOT}/convert_hf_to_gguf.py"
 TMP_ARCHIVE="${TMP_ROOT}/llama.cpp.tar.gz"
 TMP_GGUF_DIR="${TMP_ROOT}/gguf-py"
+TMP_CONVERSION_DIR="${TMP_ROOT}/conversion"
 trap 'rm -rf "${TMP_ROOT}"' EXIT INT TERM
 
 RAW_URL="https://raw.githubusercontent.com/ggml-org/llama.cpp/${TAG}/convert_hf_to_gguf.py"
@@ -106,27 +108,31 @@ ARCHIVE_URL="https://github.com/ggml-org/llama.cpp/archive/refs/tags/${TAG}.tar.
 
 info "Fetching ${RAW_URL}"
 curl -fsSL -o "${TMP_CONVERTER}" "${RAW_URL}"
-apply_local_converter_patches "${TMP_CONVERTER}"
 
 info "Fetching ${ARCHIVE_URL}"
 curl -fsSL -o "${TMP_ARCHIVE}" "${ARCHIVE_URL}"
-python3 - "${TMP_ARCHIVE}" "${TMP_GGUF_DIR}" <<'PY'
+python3 - "${TMP_ARCHIVE}" "${TMP_GGUF_DIR}" "${TMP_CONVERSION_DIR}" <<'PY'
 from pathlib import Path
 import shutil
 import sys
 import tarfile
 
 archive = Path(sys.argv[1])
-dst = Path(sys.argv[2])
-dst.mkdir(parents=True)
+destinations = {
+    "/gguf-py/": Path(sys.argv[2]),
+    "/conversion/": Path(sys.argv[3]),
+}
+for dst in destinations.values():
+    dst.mkdir(parents=True)
 
 with tarfile.open(archive, "r:gz") as tf:
-    found = False
+    found = {marker: False for marker in destinations}
     for member in tf:
-        marker = "/gguf-py/"
         name = member.name.lstrip("./")
-        if marker not in name:
+        marker = next((candidate for candidate in destinations if candidate in name), None)
+        if marker is None:
             continue
+        dst = destinations[marker]
         rel = name.split(marker, 1)[1]
         if not rel:
             continue
@@ -135,7 +141,7 @@ with tarfile.open(archive, "r:gz") as tf:
             raise SystemExit(f"unsafe gguf-py archive path: {member.name}")
         if member.isdir():
             target.mkdir(parents=True, exist_ok=True)
-            found = True
+            found[marker] = True
         elif member.isfile():
             target.parent.mkdir(parents=True, exist_ok=True)
             source = tf.extractfile(member)
@@ -143,21 +149,27 @@ with tarfile.open(archive, "r:gz") as tf:
                 raise SystemExit(f"failed to read {member.name}")
             with source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
-            found = True
+            found[marker] = True
 
-if not found or not (dst / "gguf" / "__init__.py").is_file():
+if not found["/gguf-py/"] or not (destinations["/gguf-py/"] / "gguf" / "__init__.py").is_file():
     raise SystemExit("llama.cpp archive did not contain a complete gguf-py package")
+if not found["/conversion/"] or not (destinations["/conversion/"] / "__init__.py").is_file():
+    raise SystemExit("llama.cpp archive did not contain a complete conversion package")
 PY
+apply_local_converter_patches "${TMP_CONVERSION_DIR}/base.py"
 
 SAME_CONVERTER=0
 SAME_GGUF=0
+SAME_CONVERSION=0
 cmp -s "${TMP_CONVERTER}" "${TARGET_CONVERTER}" && SAME_CONVERTER=1
 same_tree "${TARGET_GGUF_DIR}" "${TMP_GGUF_DIR}" && SAME_GGUF=1
+same_tree "${TARGET_CONVERSION_DIR}" "${TMP_CONVERSION_DIR}" && SAME_CONVERSION=1
 
 if [ "${MODE}" = "check" ]; then
     if [ "${CURRENT_TAG}" = "${TAG}" ] &&
        [ "${SAME_CONVERTER}" -eq 1 ] &&
-       [ "${SAME_GGUF}" -eq 1 ]; then
+       [ "${SAME_GGUF}" -eq 1 ] &&
+       [ "${SAME_CONVERSION}" -eq 1 ]; then
         info "Bundled assets match llama.cpp ${TAG}"
         exit 0
     fi
@@ -167,7 +179,8 @@ fi
 NEW_REVISION="${CURRENT_REVISION}"
 if [ "${CURRENT_TAG}" != "${TAG}" ] ||
    [ "${SAME_CONVERTER}" -eq 0 ] ||
-   [ "${SAME_GGUF}" -eq 0 ]; then
+   [ "${SAME_GGUF}" -eq 0 ] ||
+   [ "${SAME_CONVERSION}" -eq 0 ]; then
     NEW_REVISION=$((CURRENT_REVISION + 1))
 fi
 
@@ -175,6 +188,8 @@ mkdir -p "${REPO_ROOT}/data"
 cp "${TMP_CONVERTER}" "${TARGET_CONVERTER}"
 rm -rf "${TARGET_GGUF_DIR}"
 mv "${TMP_GGUF_DIR}" "${TARGET_GGUF_DIR}"
+rm -rf "${TARGET_CONVERSION_DIR}"
+mv "${TMP_CONVERSION_DIR}" "${TARGET_CONVERSION_DIR}"
 
 python3 - "${ASSETS_GO}" "${TAG}" "${NEW_REVISION}" <<'PY'
 from pathlib import Path

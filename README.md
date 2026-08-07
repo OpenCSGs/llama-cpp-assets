@@ -1,7 +1,8 @@
 # llama.cpp assets for CSGLite
 
 This Go module packages a version-locked llama.cpp
-`convert_hf_to_gguf.py` script and its complete matching `gguf-py` package.
+`convert_hf_to_gguf.py` script and its complete matching `gguf-py` and
+`conversion` packages.
 Consumers embed the module into their binaries, so end users do not need Git or
 a llama.cpp source download at runtime.
 
