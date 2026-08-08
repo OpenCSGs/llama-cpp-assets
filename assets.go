@@ -4,9 +4,9 @@ import "embed"
 
 const (
 	// LlamaCppRef is the upstream llama.cpp release used for every bundled asset.
-	LlamaCppRef = "b10310"
+	LlamaCppRef = "b10326"
 	// Revision changes whenever the synchronized or locally patched assets change.
-	Revision = 2
+	Revision = 3
 
 	ConverterPath  = "data/convert_hf_to_gguf.py"
 	GGUFPyRoot     = "data/gguf-py"
